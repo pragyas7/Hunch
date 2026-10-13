@@ -19,7 +19,38 @@ const toBlock = async (tag: string | undefined): Promise<number | undefined> => 
   return tag === "earliest" ? 0 : parseInt(tag, 16);
 };
 
-async function getLogs(filter: any) {
+// Short-lived per-instance cache: many friends polling the same group share one HyperSync query.
+const cache = new Map<string, { at: number; value: Promise<unknown> }>();
+const CACHE_MS = 2000;
+
+async function hypersync(body: unknown) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(HYPERSYNC, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.ENVIO_TOKEN}` },
+      body: JSON.stringify(body),
+    });
+    if (r.status === 429 && attempt < 3) {
+      await new Promise((res) => setTimeout(res, 300 * 2 ** attempt));
+      continue;
+    }
+    if (!r.ok) throw new Error(`hypersync ${r.status}`);
+    return r.json();
+  }
+}
+
+function getLogs(filter: any) {
+  const key = JSON.stringify(filter);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const value = fetchLogs(filter);
+  cache.set(key, { at: Date.now(), value });
+  value.catch(() => cache.delete(key));
+  if (cache.size > 500) cache.clear();
+  return value;
+}
+
+async function fetchLogs(filter: any) {
   const hunch = (process.env.VITE_HUNCH ?? "").toLowerCase();
   if (String(filter.address ?? "").toLowerCase() !== hunch) throw new Error("only Hunch logs are served");
   const topics = (filter.topics ?? []).map((t: string | string[] | null) => (t == null ? [] : Array.isArray(t) ? t : [t]));
@@ -27,20 +58,14 @@ async function getLogs(filter: any) {
   const to = await toBlock(filter.toBlock);
   const out: HsLog[] = [];
   for (let i = 0; i < 20; i++) {
-    const r = await fetch(HYPERSYNC, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.ENVIO_TOKEN}` },
-      body: JSON.stringify({
+    const page = (await hypersync({
         from_block: from,
         ...(to !== undefined ? { to_block: to + 1 } : {}),
         logs: [{ address: [hunch], topics }],
         field_selection: {
           log: ["block_number", "log_index", "transaction_index", "transaction_hash", "block_hash", "address", "data", "topic0", "topic1", "topic2", "topic3"],
         },
-      }),
-    });
-    if (!r.ok) throw new Error(`hypersync ${r.status}`);
-    const page = (await r.json()) as { data: { logs?: HsLog[] }[]; next_block: number; archive_height: number };
+    })) as { data: { logs?: HsLog[] }[]; next_block: number; archive_height: number };
     for (const batch of page.data) out.push(...(batch.logs ?? []));
     if (page.next_block >= (to !== undefined ? to + 1 : page.archive_height) || page.next_block <= from) break;
     from = page.next_block;

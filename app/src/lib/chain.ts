@@ -7,7 +7,8 @@ export const USD = import.meta.env.VITE_USD as Address;
 export const DEPLOY_BLOCK = BigInt(import.meta.env.VITE_DEPLOY_BLOCK);
 export const EXPLORER = "https://testnet.monadexplorer.com";
 
-export const publicClient = createPublicClient({ chain: monadTestnet, transport: http() });
+// Batch concurrent reads into Multicall3 calls to stay well under public RPC rate limits.
+export const publicClient = createPublicClient({ chain: monadTestnet, transport: http(), batch: { multicall: { wait: 16 } } });
 
 export const hunchAbi = parseAbi([
   "function setKeyring(bytes blob)",

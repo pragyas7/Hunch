@@ -22098,9 +22098,7 @@ var fetchPrice = (req, url, asset) => {
   if (!ok(res))
     throw new Error(`price API HTTP ${res.statusCode}`);
   const usd = JSON.parse(text(res))?.[asset]?.usd;
-  if (typeof usd !== "number")
-    throw new Error(`no price for ${asset}`);
-  return usd;
+  return typeof usd === "number" ? usd : -1;
 };
 var onCron = (runtime) => {
   const cfg = runtime.config;
@@ -22126,16 +22124,23 @@ var onCron = (runtime) => {
   const priceOf = new Map;
   for (const asset of new Set(assets)) {
     const usd = http.sendRequest(runtime, fetchPrice, consensusMedianAggregation())(cfg.priceApi, asset).result();
+    if (usd <= 0) {
+      runtime.log(`no price for ${asset}, skipping`);
+      continue;
+    }
     priceOf.set(asset, BigInt(Math.round(usd * 1e8)));
     runtime.log(`${asset} = $${usd}`);
   }
-  const payload = encodeAbiParameters2([{ type: "uint256[]" }, { type: "uint256[]" }], [[...ids], assets.map((a) => priceOf.get(a))]);
+  const ready = ids.map((id, i) => [id, priceOf.get(assets[i])]).filter(([, p]) => p !== undefined);
+  if (ready.length === 0)
+    return "no prices";
+  const payload = encodeAbiParameters2([{ type: "uint256[]" }, { type: "uint256[]" }], [ready.map(([id]) => id), ready.map(([, p]) => p)]);
   const report = runtime.report(prepareReportRequest(payload)).result();
   const tx = evm.writeReport(runtime, { receiver: cfg.oracleAddress, report, gasConfig: { gasLimit: cfg.gasLimit } }).result();
   if (tx.txStatus !== TxStatus.SUCCESS)
     throw new Error(`write failed: ${tx.errorMessage ?? tx.txStatus}`);
   const hash = bytesToHex3(tx.txHash ?? new Uint8Array(32));
-  runtime.log(`settled ${ids.length} hunch(es) in tx ${hash}`);
+  runtime.log(`settled ${ready.length} hunch(es) in tx ${hash}`);
   return hash;
 };
 var initWorkflow = (cfg) => [handler(new CronCapability().trigger({ schedule: cfg.schedule }), onCron)];

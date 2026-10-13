@@ -1,4 +1,4 @@
-import { createPublicClient, encodeFunctionData, http, maxUint256, parseEventLogs, type Address, type Hex } from "viem";
+import { createPublicClient, encodeFunctionData, formatLog, http, maxUint256, parseEventLogs, toHex, type RpcLog, type Address, type Hex } from "viem";
 import { monadTestnet } from "viem/chains";
 import { DEPLOY_BLOCK, HUNCH, ORACLE, USD, hunchAbi, oracleAbi, publicClient, usdAbi } from "./chain";
 import { groupKeys, inviteSigner, newGroupSecret, open, seal, signInvite, type GroupKeys } from "./crypto";
@@ -114,47 +114,63 @@ export async function joinGroup(u: Unlocked, secret: Hex, keyring: Keyring) {
   return { name, next };
 }
 
-export async function loadGroup(entry: KeyringEntry): Promise<Group> {
-  const g = await groupKeys(entry.secret);
-  const [joined, notes, info] = await Promise.all([
-    history.getContractEvents({ address: HUNCH, abi: hunchAbi, eventName: "MemberJoined", args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK }),
-    history.getContractEvents({ address: HUNCH, abi: hunchAbi, eventName: "GroupNote", args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK }),
-    publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "groups", args: [g.groupId] }),
-  ]);
-  const names = new Map<string, string>();
-  for (const n of notes) {
-    try {
-      const msg = JSON.parse(await open(g.content, n.args.encNote!));
-      if (msg.t === "name") names.set(n.args.author!.toLowerCase(), String(msg.v).slice(0, 24));
-    } catch { /* ignore undecryptable notes */ }
-  }
-  return { ...g, name: entry.name, members: joined.map((l) => l.args.member!), creator: info[0], names };
+/** eth_getLogs with a raw topic filter (viem's getLogs only builds topics from a single event). */
+async function rawLogs(topics: (Hex | null)[]) {
+  const logs = (await history.request({
+    method: "eth_getLogs",
+    params: [{ address: HUNCH, topics, fromBlock: toHex(DEPLOY_BLOCK) }],
+  })) as RpcLog[];
+  return logs.map((l) => formatLog(l));
 }
 
-// ---------- markets ----------
+const ruleCache = new Map<bigint, Market["oracle"] | null>();
 
-export async function loadMarkets(g: Group): Promise<Market[]> {
-  const filter = { address: HUNCH, abi: hunchAbi, args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK } as const;
-  const [created, bets, claims] = await Promise.all([
-    history.getContractEvents({ ...filter, eventName: "MarketCreated" }),
-    history.getContractEvents({ ...filter, eventName: "BetPlaced" }),
-    history.getContractEvents({ ...filter, eventName: "Claimed" }),
+/**
+ * Everything a group screen needs, from two HyperSync queries: events where the groupId is the first indexed
+ * topic (GroupCreated, MemberJoined, GroupNote) and where it's the second (market events). Contract state is
+ * read in one multicall batch.
+ */
+export async function loadGroupState(entry: KeyringEntry): Promise<{ group: Group; markets: Market[] }> {
+  const g = await groupKeys(entry.secret);
+  const [asTopic1, asTopic2, info] = await Promise.all([
+    rawLogs([null, g.groupId]),
+    rawLogs([null, null, g.groupId]),
+    publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "groups", args: [g.groupId] }),
   ]);
+  const logs = parseEventLogs({ abi: hunchAbi, logs: [...asTopic1, ...asTopic2] });
+  const of = <N extends (typeof logs)[number]["eventName"]>(name: N) =>
+    logs.filter((l): l is Extract<(typeof logs)[number], { eventName: N }> => l.eventName === name);
+
+  const names = new Map<string, string>();
+  for (const n of of("GroupNote")) {
+    try {
+      const msg = JSON.parse(await open(g.content, n.args.encNote));
+      if (msg.t === "name") names.set(n.args.author.toLowerCase(), String(msg.v).slice(0, 24));
+    } catch { /* ignore undecryptable notes */ }
+  }
+  const group: Group = { ...g, name: entry.name, members: of("MemberJoined").map((l) => l.args.member), creator: info[0], names };
+
+  const bets = of("BetPlaced");
+  const claims = of("Claimed");
   const markets = await Promise.all(
-    created.map(async (l) => {
-      const id = l.args.marketId!;
+    of("MarketCreated").map(async (l) => {
+      const id = l.args.marketId;
       const [m, resolver] = await Promise.all([
         publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "markets", args: [id] }),
-        publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "resolverOf", args: [id] }),
+        ruleCache.has(id) ? Promise.resolve(null) : publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "resolverOf", args: [id] }),
       ]);
-      let oracle: Market["oracle"];
-      if (ORACLE && resolver.toLowerCase() === ORACLE.toLowerCase()) {
-        const r = await publicClient.readContract({ address: ORACLE, abi: oracleAbi, functionName: "rules", args: [id] });
-        oracle = { asset: r[0], threshold: r[1], above: r[2] };
+      if (!ruleCache.has(id)) {
+        let rule: Market["oracle"] | null = null;
+        if (ORACLE && resolver && resolver.toLowerCase() === ORACLE.toLowerCase()) {
+          const r = await publicClient.readContract({ address: ORACLE, abi: oracleAbi, functionName: "rules", args: [id] });
+          rule = r[0] ? { asset: r[0], threshold: r[1], above: r[2] } : null;
+        }
+        // Rules are immutable once set; don't cache an oracle market whose rule hasn't landed yet.
+        if (rule || !ORACLE || resolver?.toLowerCase() !== ORACLE.toLowerCase()) ruleCache.set(id, rule);
       }
       let question = "🔒 (couldn't decrypt)";
       try {
-        question = await open(g.content, l.args.encQuestion!);
+        question = await open(g.content, l.args.encQuestion);
       } catch { /* wrong key — leave placeholder */ }
       return {
         id,
@@ -167,13 +183,13 @@ export async function loadMarkets(g: Group): Promise<Market[]> {
         question,
         bets: bets
           .filter((b) => b.args.marketId === id)
-          .map((b) => ({ bettor: b.args.bettor!, yes: b.args.yes!, amount: b.args.amount!, block: b.blockNumber })),
-        claimed: new Set(claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor!.toLowerCase())),
-        oracle,
+          .map((b) => ({ bettor: b.args.bettor, yes: b.args.yes, amount: b.args.amount, block: b.blockNumber })),
+        claimed: new Set(claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor.toLowerCase())),
+        oracle: ruleCache.get(id) ?? undefined,
       } satisfies Market;
     }),
   );
-  return markets.sort((a, b) => Number(b.id - a.id));
+  return { group, markets: markets.sort((a, b) => Number(b.id - a.id)) };
 }
 
 export async function createMarket(u: Unlocked, g: Group, question: string, closesAt: number, rule?: OracleRule) {

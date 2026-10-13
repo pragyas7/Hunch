@@ -6,7 +6,7 @@ import {
 import { EXPLORER, ORACLE, fmtUsd } from "./lib/chain";
 import { codeToSecret, secretToCode } from "./lib/crypto";
 import {
-  claimPayout, createGroup, createMarket, joinGroup, leaderboard, loadGroup, loadKeyring, loadMarkets,
+  claimPayout, createGroup, createMarket, joinGroup, leaderboard, loadGroupState, loadKeyring,
   placeBet, resolveMarket, saveKeyring, sponsor, stakeOf, usdBalance, globalStats,
   type Group, type Keyring, type Market, type OracleRule,
 } from "./lib/data";
@@ -255,17 +255,18 @@ function GroupView({ entry, me, run, now, onMoney }: {
   const alive = useRef(true);
 
   const refresh = useCallback(async () => {
-    const g = await loadGroup(entry);
-    const ms = await loadMarkets(g);
-    if (!alive.current) return;
-    setGroup(g);
-    setMarkets(ms);
+    try {
+      const { group: g, markets: ms } = await loadGroupState(entry);
+      if (!alive.current) return;
+      setGroup(g);
+      setMarkets(ms);
+    } catch { /* transient read error — next poll retries */ }
   }, [entry]);
 
   useEffect(() => {
     alive.current = true;
     refresh();
-    const t = setInterval(refresh, 4000);
+    const t = setInterval(() => { if (!document.hidden) refresh(); }, 5000);
     return () => { alive.current = false; clearInterval(t); };
   }, [refresh]);
 
@@ -467,7 +468,7 @@ function MarketCard({ m, me, now, nameOf, onBet, onResolve, onClaim }: {
       </div>
       <div className="meta">
         <span>{fmtUsd(total)} in the pot</span>
-        <span>{new Set(m.bets.map((b) => b.bettor)).size} people in</span>
+        <span>{plural(new Set(m.bets.map((b) => b.bettor)).size, "person", "people")} in</span>
       </div>
       {(mine.yes > 0n || mine.no > 0n) && (
         <div className="mine">
@@ -489,7 +490,7 @@ function MarketCard({ m, me, now, nameOf, onBet, onResolve, onClaim }: {
         </div>
       )}
       {m.oracle && (
-        <div className="oracle">⛓ Auto-settles via Chainlink · {m.oracle.asset} {m.oracle.above ? ">" : "<"} ${(Number(m.oracle.threshold) / 1e8).toLocaleString()}</div>
+        <div className="oracle">⛓ {m.outcome ? "Settled" : "Auto-settles"} via Chainlink · {ASSETS.find((a) => a.id === m.oracle!.asset)?.sym ?? m.oracle.asset} {m.oracle.above ? ">" : "<"} ${(Number(m.oracle.threshold) / 1e8).toLocaleString()}</div>
       )}
       {m.outcome === 0 && isCreator && !m.oracle && (
         <div className="settle">
@@ -543,6 +544,8 @@ function Avatar({ seed, label, small, big }: { seed: string; label: string; smal
     </span>
   );
 }
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 function until(ms: number) {
   if (ms <= 0) return "now";
