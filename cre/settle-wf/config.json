@@ -1,0 +1,7 @@
+{
+  "schedule": "*/30 * * * * *",
+  "chainSelectorName": "monad-testnet",
+  "oracleAddress": "0x6AC28Ae77f606232da6029aC352381A7F59F7830",
+  "priceApi": "https://api.coingecko.com/api/v3/simple/price?vs_currencies=usd&ids=",
+  "gasLimit": "800000"
+}

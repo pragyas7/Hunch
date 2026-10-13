@@ -41,6 +41,8 @@ contract Hunch {
     mapping(uint256 => mapping(address => uint256)) public yesStake;
     mapping(uint256 => mapping(address => uint256)) public noStake;
     mapping(uint256 => mapping(address => bool)) public claimed;
+    /// @notice Optional automated settler (e.g. a Chainlink CRE oracle). When set, only it can settle.
+    mapping(uint256 => address) public resolverOf;
 
     event GroupCreated(bytes32 indexed groupId, address indexed creator, bytes encName);
     event MemberJoined(bytes32 indexed groupId, address indexed member);
@@ -96,10 +98,26 @@ contract Hunch {
     // ---------- markets ----------
 
     function createMarket(bytes32 groupId, uint64 closesAt, bytes calldata encQuestion) external returns (uint256 id) {
+        return _createMarket(groupId, closesAt, encQuestion, address(0));
+    }
+
+    function createMarketWithResolver(bytes32 groupId, uint64 closesAt, bytes calldata encQuestion, address resolver)
+        external
+        returns (uint256 id)
+    {
+        require(resolver != address(0), "resolver");
+        return _createMarket(groupId, closesAt, encQuestion, resolver);
+    }
+
+    function _createMarket(bytes32 groupId, uint64 closesAt, bytes calldata encQuestion, address resolver)
+        internal
+        returns (uint256 id)
+    {
         require(isMember[groupId][msg.sender], "not member");
         require(closesAt > block.timestamp, "close");
         id = markets.length;
         markets.push(Market(groupId, msg.sender, closesAt, Outcome.Open, 0, 0));
+        if (resolver != address(0)) resolverOf[id] = resolver;
         emit MarketCreated(id, groupId, msg.sender, closesAt, encQuestion);
     }
 
@@ -119,10 +137,17 @@ contract Hunch {
         emit BetPlaced(id, m.groupId, msg.sender, yes, amount);
     }
 
-    /// @notice The market creator calls it. Allowed once betting has closed, or early to end the market.
+    /// @notice Settles a market. Creator-settled markets may settle early (ending betting); markets with an
+    ///         automated resolver can only be settled by it, and only after betting closes.
     function resolve(uint256 id, Outcome outcome) external {
         Market storage m = markets[id];
-        require(msg.sender == m.creator, "creator");
+        address r = resolverOf[id];
+        if (r == address(0)) {
+            require(msg.sender == m.creator, "creator");
+        } else {
+            require(msg.sender == r, "resolver");
+            require(block.timestamp >= m.closesAt, "not closed");
+        }
         require(m.outcome == Outcome.Open, "resolved");
         require(outcome != Outcome.Open, "outcome");
         if (block.timestamp < m.closesAt) m.closesAt = uint64(block.timestamp);

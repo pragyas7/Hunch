@@ -3,12 +3,12 @@ import type { Address } from "viem";
 import {
   cachedAddress, friendlyError, hasCredentialHint, logIn, signUp, forget, type Unlocked,
 } from "./lib/account";
-import { EXPLORER, fmtUsd } from "./lib/chain";
+import { EXPLORER, ORACLE, fmtUsd } from "./lib/chain";
 import { codeToSecret, secretToCode } from "./lib/crypto";
 import {
   claimPayout, createGroup, createMarket, joinGroup, leaderboard, loadGroup, loadKeyring, loadMarkets,
   placeBet, resolveMarket, saveKeyring, sponsor, stakeOf, usdBalance, globalStats,
-  type Group, type Keyring, type Market,
+  type Group, type Keyring, type Market, type OracleRule,
 } from "./lib/data";
 
 type Toast = { kind: "busy" | "ok" | "err"; text: string; href?: string } | null;
@@ -317,9 +317,9 @@ function GroupView({ entry, me, run, now, onMoney }: {
           {composing ? (
             <Composer
               onCancel={() => setComposing(false)}
-              onSubmit={(q, closesAt) => {
+              onSubmit={(q, closesAt, rule) => {
                 setComposing(false);
-                act("Posting hunch…", () => createMarket(me, group!, q, closesAt), "Hunch posted");
+                act("Posting hunch…", () => createMarket(me, group!, q, closesAt, rule), "Hunch posted");
               }}
             />
           ) : (
@@ -349,9 +349,22 @@ const CLOSES = [
   { label: "1 week", s: 7 * 86400 },
 ];
 
-function Composer({ onSubmit, onCancel }: { onSubmit: (q: string, closesAt: number) => void; onCancel: () => void }) {
+const ASSETS = [
+  { id: "bitcoin", sym: "BTC" },
+  { id: "ethereum", sym: "ETH" },
+  { id: "solana", sym: "SOL" },
+  { id: "monad", sym: "MON" },
+];
+
+function Composer({ onSubmit, onCancel }: {
+  onSubmit: (q: string, closesAt: number, rule?: OracleRule) => void; onCancel: () => void;
+}) {
+  const [mode, setMode] = useState<"friends" | "price">("friends");
   const [q, setQ] = useState("Will ");
   const [close, setClose] = useState(2);
+  const [asset, setAsset] = useState(1);
+  const [above, setAbove] = useState(true);
+  const [threshold, setThreshold] = useState("");
   const closesAt = () => {
     const c = CLOSES[close];
     if (c.s > 0) return Math.floor(Date.now() / 1000) + c.s;
@@ -359,19 +372,54 @@ function Composer({ onSubmit, onCancel }: { onSubmit: (q: string, closesAt: numb
     d.setHours(23, 59, 0, 0);
     return Math.floor(d.getTime() / 1000);
   };
+  const t = Number(threshold);
+  const priceQ = `Will ${ASSETS[asset].sym} be ${above ? "above" : "below"} $${t ? t.toLocaleString() : "…"} when betting closes?`;
+  const valid = mode === "friends" ? q.trim().length > 5 : t > 0;
+  const submit = () =>
+    mode === "friends"
+      ? onSubmit(q.trim(), closesAt())
+      : onSubmit(priceQ, closesAt(), { asset: ASSETS[asset].id, threshold: t, above });
   return (
-    <form className="card form composer" onSubmit={(e) => { e.preventDefault(); if (q.trim().length > 5) onSubmit(q.trim(), closesAt()); }}>
-      <textarea autoFocus rows={2} value={q} maxLength={140} onChange={(e) => setQ(e.target.value)} />
+    <form className="card form composer" onSubmit={(e) => { e.preventDefault(); if (valid) submit(); }}>
+      {ORACLE && (
+        <div className="tabs mini">
+          <button type="button" className={mode === "friends" ? "on" : ""} onClick={() => setMode("friends")}>About a friend</button>
+          <button type="button" className={mode === "price" ? "on" : ""} onClick={() => setMode("price")}>Price call ⛓</button>
+        </div>
+      )}
+      {mode === "friends" ? (
+        <textarea autoFocus rows={2} value={q} maxLength={140} onChange={(e) => setQ(e.target.value)} />
+      ) : (
+        <>
+          <div className="seg">
+            {ASSETS.map((a, i) => (
+              <button type="button" key={a.id} className={i === asset ? "on" : ""} onClick={() => setAsset(i)}>{a.sym}</button>
+            ))}
+          </div>
+          <div className="row">
+            <div className="seg">
+              <button type="button" className={above ? "on" : ""} onClick={() => setAbove(true)}>above</button>
+              <button type="button" className={!above ? "on" : ""} onClick={() => setAbove(false)}>below</button>
+            </div>
+            <input inputMode="decimal" placeholder="$ price" value={threshold} onChange={(e) => setThreshold(e.target.value.replace(/[^0-9.]/g, ""))} />
+          </div>
+          <div className="preview">{priceQ}</div>
+        </>
+      )}
       <div className="seg">
         <span className="muted">Betting closes</span>
         {CLOSES.map((c, i) => (
           <button type="button" key={c.label} className={i === close ? "on" : ""} onClick={() => setClose(i)}>{c.label}</button>
         ))}
       </div>
-      <small>🔒 Only group members can read this. You settle it once betting closes.</small>
+      <small>
+        {mode === "friends"
+          ? "🔒 Only group members can read this. You settle it once betting closes."
+          : "⛓ Settled automatically by a Chainlink workflow using live market prices. Nobody in the group can override it."}
+      </small>
       <div className="row">
         <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={q.trim().length <= 5}>Post hunch</button>
+        <button className="primary" disabled={!valid}>Post hunch</button>
       </div>
     </form>
   );
@@ -440,7 +488,10 @@ function MarketCard({ m, me, now, nameOf, onBet, onResolve, onClaim }: {
           <small className="muted">Payout is your share of the whole pot if you're right. It shifts as friends bet.</small>
         </div>
       )}
-      {m.outcome === 0 && isCreator && (
+      {m.oracle && (
+        <div className="oracle">⛓ Auto-settles via Chainlink · {m.oracle.asset} {m.oracle.above ? ">" : "<"} ${(Number(m.oracle.threshold) / 1e8).toLocaleString()}</div>
+      )}
+      {m.outcome === 0 && isCreator && !m.oracle && (
         <div className="settle">
           <span className="muted">{open ? "Already know? Settle early:" : "Betting's closed. What happened?"}</span>
           <div className="row">

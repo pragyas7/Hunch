@@ -11,6 +11,8 @@ const abi = parseAbi([
   "function createGroup(bytes32,address,bytes)", "function joinGroup(bytes32,bytes)", "function post(bytes32,bytes)",
   "function createMarket(bytes32,uint64,bytes) returns (uint256)", "function bet(uint256,bool,uint256)",
   "function resolve(uint256,uint8)", "function marketCount() view returns (uint256)",
+  "function createMarketWithResolver(bytes32,uint64,bytes,address) returns (uint256)",
+  "function setRule(uint256,string,uint256,bool)",
   "function approve(address,uint256) returns (bool)", "function transfer(address,uint256) returns (bool)",
 ]);
 const fees = { maxFeePerGas: parseGwei("120"), maxPriorityFeePerGas: parseGwei("2") };
@@ -55,4 +57,14 @@ const m2 = await market(priya, "Does the group chat agree on a restaurant in und
 await bet(sam, m2, false, 8); await bet(leo, m2, true, 2);
 const m3 = await market(sam, "Will a Metropolis judge bet on this market?", now + 7 * 86400);
 await bet(maya, m3, true, 1);
+// A Chainlink-settled price call that closes in ~4 minutes, for the CRE demo.
+const ORACLE = process.env.VITE_ORACLE as Address;
+const eth = (await (await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd")).json()).ethereum.usd as number;
+const strike = Math.round(eth / 10) * 10;
+const qp = `Will ETH be above $${strike.toLocaleString()} when betting closes?`;
+const m4 = await pub.readContract({ address: HUNCH, abi, functionName: "marketCount" });
+await wait(leo.w.writeContract({ address: HUNCH, abi, functionName: "createMarketWithResolver", args: [g.groupId, BigInt(now + 240), await seal(g.content, qp), ORACLE], ...fees }));
+await wait(leo.w.writeContract({ address: ORACLE, abi, functionName: "setRule", args: [m4, "ethereum", BigInt(strike) * 100_000_000n, true], ...fees }));
+await bet(priya, m4, true, 6); await bet(sam, m4, false, 4);
+console.log("oracle market", m4, qp);
 console.log(`https://hunch-neon.vercel.app/#join=${secretToCode(secret)}`);

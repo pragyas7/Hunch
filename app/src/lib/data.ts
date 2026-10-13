@@ -1,6 +1,6 @@
-import { createPublicClient, encodeFunctionData, http, maxUint256, type Address, type Hex } from "viem";
+import { createPublicClient, encodeFunctionData, http, maxUint256, parseEventLogs, type Address, type Hex } from "viem";
 import { monadTestnet } from "viem/chains";
-import { DEPLOY_BLOCK, HUNCH, USD, hunchAbi, publicClient, usdAbi } from "./chain";
+import { DEPLOY_BLOCK, HUNCH, ORACLE, USD, hunchAbi, oracleAbi, publicClient, usdAbi } from "./chain";
 import { groupKeys, inviteSigner, newGroupSecret, open, seal, signInvite, type GroupKeys } from "./crypto";
 import type { Unlocked } from "./account";
 
@@ -22,7 +22,10 @@ export type Market = {
   question: string;
   bets: Bet[];
   claimed: Set<string>;
+  oracle?: { asset: string; threshold: bigint; above: boolean };
 };
+
+export type OracleRule = { asset: string; threshold: number; above: boolean };
 
 // ---------- keyring (group keys wrapped under the passkey-derived key, stored onchain) ----------
 
@@ -140,7 +143,15 @@ export async function loadMarkets(g: Group): Promise<Market[]> {
   const markets = await Promise.all(
     created.map(async (l) => {
       const id = l.args.marketId!;
-      const m = await publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "markets", args: [id] });
+      const [m, resolver] = await Promise.all([
+        publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "markets", args: [id] }),
+        publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "resolverOf", args: [id] }),
+      ]);
+      let oracle: Market["oracle"];
+      if (ORACLE && resolver.toLowerCase() === ORACLE.toLowerCase()) {
+        const r = await publicClient.readContract({ address: ORACLE, abi: oracleAbi, functionName: "rules", args: [id] });
+        oracle = { asset: r[0], threshold: r[1], above: r[2] };
+      }
       let question = "🔒 (couldn't decrypt)";
       try {
         question = await open(g.content, l.args.encQuestion!);
@@ -158,17 +169,35 @@ export async function loadMarkets(g: Group): Promise<Market[]> {
           .filter((b) => b.args.marketId === id)
           .map((b) => ({ bettor: b.args.bettor!, yes: b.args.yes!, amount: b.args.amount!, block: b.blockNumber })),
         claimed: new Set(claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor!.toLowerCase())),
+        oracle,
       } satisfies Market;
     }),
   );
   return markets.sort((a, b) => Number(b.id - a.id));
 }
 
-export async function createMarket(u: Unlocked, g: Group, question: string, closesAt: number) {
+export async function createMarket(u: Unlocked, g: Group, question: string, closesAt: number, rule?: OracleRule) {
   const enc = await seal(g.content, question);
-  await u.send({
+  if (!rule || !ORACLE) {
+    await u.send({
+      to: HUNCH,
+      data: encodeFunctionData({ abi: hunchAbi, functionName: "createMarket", args: [g.groupId, BigInt(closesAt), enc] }),
+    });
+    return;
+  }
+  const hash = await u.send({
     to: HUNCH,
-    data: encodeFunctionData({ abi: hunchAbi, functionName: "createMarket", args: [g.groupId, BigInt(closesAt), enc] }),
+    data: encodeFunctionData({ abi: hunchAbi, functionName: "createMarketWithResolver", args: [g.groupId, BigInt(closesAt), enc, ORACLE] }),
+  });
+  const receipt = await publicClient.getTransactionReceipt({ hash });
+  const [created] = parseEventLogs({ abi: hunchAbi, eventName: "MarketCreated", logs: receipt.logs });
+  const id = created.args.marketId;
+  await u.send({
+    to: ORACLE,
+    data: encodeFunctionData({
+      abi: oracleAbi, functionName: "setRule",
+      args: [id, rule.asset, BigInt(Math.round(rule.threshold * 1e8)), rule.above],
+    }),
   });
 }
 

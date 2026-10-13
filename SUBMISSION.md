@@ -3,7 +3,7 @@
 **Live:** https://hunch-neon.vercel.app · **Repo:** https://github.com/pragyas7/Hunch (share with metropolis@hackathon.monad.xyz)
 **Judge access:** open the link on a phone (iOS Safari / Android Chrome, or Mac Safari with iCloud Keychain). Sign up with Face ID. No credentials needed: each new account gets gas and $50 of testnet AUSD.
 **Demo group for judges** (pre-seeded with members, live markets and a settled one; tap after signing up):
-https://hunch-neon.vercel.app/#join=hPbUucHjuJQfoBn2pU5ugj2rcqZfTYQwceJOWKABAJc
+https://hunch-neon.vercel.app/#join=lujIxgEdoSIjCqVl3G-RTqD-xPt8whQ0xw6dCMQM4Ck
 
 **Tagline:** Private prediction markets for your group chat.
 
@@ -15,6 +15,7 @@ https://hunch-neon.vercel.app/#join=hPbUucHjuJQfoBn2pU5ugj2rcqZfTYQwceJOWKABAJc
 | **Mera: Best Mera-Powered UX** | Mera is the entire account layer: one passkey ceremony, no seed phrase or extension, sponsored gas, an in-memory session scoped to two contracts with a 30-minute expiry. Passes the stateless test. |
 | **Mera: One Passkey, Many Keys** | A PRF-derived HKDF namespace (`hunch/keyring/v1`) encrypts the user's group-key keyring, which is stored onchain. On a fresh device the same passkey decrypts every private group live. |
 | **Envio: Best Use of Envio** | HyperSync is the app's history layer. `/api/rpc` translates eth_getLogs calls into paginated, topic-filtered HyperSync queries, and the feed, member names and leaderboard are derived from it. |
+| **Chainlink: Best workflow with CRE** | `cre/settle-wf` is the settlement layer for "price call" hunches. A cron trigger leads to an EVM read (`HunchOracle.due()`), then an HTTP price fetch with median consensus, then a signed report, then `writeReport`, then `HunchOracle.onReport`, then `Hunch.resolve`. Demo: `cre workflow simulate --broadcast` settles a live market on Monad testnet. |
 | **Best Community Team Project** | Fill in your campus group on your profile. |
 
 ---
@@ -57,6 +58,14 @@ The keyring key encrypts the user's list of group keys, and that ciphertext live
   - the group feed (`MarketCreated`, `BetPlaced`, `Claimed`);
   - membership and display names (`MemberJoined`, `GroupNote`);
   - per-group leaderboard aggregation (P&L and hit rate per member across settled markets).
+
+**Chainlink CRE: how is CRE used as the orchestration layer?**
+- Hunch has two kinds of markets: friend calls (settled by the creator) and **price calls**, which no group member can settle.
+- For price calls, CRE is the only party that can settle. Each run, the workflow:
+  1. reads which markets are due from Monad (`HunchOracle.due()`);
+  2. fetches each asset's price from an external API with median consensus across nodes;
+  3. writes a signed report through the Chainlink forwarder to `HunchOracle.onReport`, which applies each market's public rule and calls `Hunch.resolve`.
+- This connects Monad, an external data API and our contracts. It's what lets friends bet on public facts without trusting whoever posted the question.
 
 ---
 

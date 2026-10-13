@@ -13,7 +13,7 @@ import { entropyToMnemonic, mnemonicToSeedSync } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { createWalletClient, http, nonceManager, parseGwei, type Address, type Hex } from "viem";
 import { monadTestnet } from "viem/chains";
-import { HUNCH, USD, publicClient } from "./chain";
+import { HUNCH, ORACLE, USD, publicClient } from "./chain";
 import { deriveKeyringKey } from "./crypto";
 
 const CRED_KEY = "hunch.cred"; // credential id hint only — not secret, safe to lose
@@ -51,7 +51,7 @@ function scoped(session: Secp256k1SigningSession, keyringKey: CryptoKey): Unlock
   });
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const timer = setTimeout(() => session.end(), SESSION_TTL_MS);
-  const allowed = new Set([HUNCH.toLowerCase(), USD.toLowerCase()]);
+  const allowed = new Set([HUNCH, USD, ORACLE].filter(Boolean).map((a) => a.toLowerCase()));
   localStorage.setItem(ADDR_KEY, address);
   return {
     address,

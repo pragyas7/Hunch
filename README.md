@@ -33,6 +33,21 @@ Hunch puts all three onchain, where they're cheap, while keeping the chain invis
 | New phone, sign in | Your list of group keys (your **keyring**) is stored onchain, encrypted under a key derived from your passkey PRF via HKDF (`hunch/keyring/v1`). One Face ID restores the account, every group, and every decrypted question. No secrets are stored anywhere. |
 | Feed, names, leaderboard | Full event history is read through **Envio HyperSync** (`/api/rpc` translates the app's `eth_getLogs` calls into HyperSync queries). The public Monad RPC limits logs to 100 blocks, about 40 seconds of history. |
 
+### Chainlink-settled "price calls"
+
+Friend markets are settled by their creator. For public facts, the creator can instead pick **Price call ⛓**, e.g. "Will ETH be above $2,510 when betting closes?". These markets get an automated resolver, and **nobody in the group, including the creator, can settle them by hand**.
+
+1. `Hunch.createMarketWithResolver(...)` sets `resolverOf[id] = HunchOracle`, then `HunchOracle.setRule(id, "ethereum", 2510e8, above)` stores the public rule. The question text itself stays encrypted.
+2. A **Chainlink CRE workflow** (`cre/settle-wf/main.ts`) runs on a cron:
+   - EVM read of `HunchOracle.due()`: the markets whose betting has closed.
+   - HTTP fetch of each asset's USD price (CoinGecko), with **median consensus** across DON nodes.
+   - A signed report `(marketIds[], prices[])`, delivered via `writeReport` to the Chainlink forwarder.
+3. `HunchOracle.onReport` (forwarder-only) checks each rule and calls `Hunch.resolve`. Winners collect as usual.
+
+```bash
+cd cre && cre workflow simulate settle-wf --target staging-settings --broadcast   # needs `cre login` + CRE_ETH_PRIVATE_KEY
+```
+
 ### Key hierarchy
 
 ```
@@ -58,7 +73,8 @@ Nothing is written to disk except a credential-id hint and your public address, 
 ## Repo layout
 
 ```
-contracts/          Foundry: Hunch.sol (groups, keyring, markets), HunchUSD.sol (mock dollar, unused in prod), tests
+contracts/          Foundry: Hunch.sol (groups, keyring, markets), HunchOracle.sol (CRE consumer), HunchUSD.sol (mock dollar for tests), tests
+cre/settle-wf/      Chainlink CRE workflow: cron → read due markets → HTTP price consensus → signed report → settle
 app/                Vite + React + viem mobile web app
   src/lib/account.ts  Mera passkey sign-up / sign-in, scoped signing session
   src/lib/crypto.ts   Key hierarchy above (WebCrypto HKDF + AES-GCM, invite signatures)
@@ -72,7 +88,9 @@ app/                Vite + React + viem mobile web app
 
 | Contract | Address |
 |---|---|
-| Hunch | [`0x94c4Ed74E942fEAe4FC79e31D24eaaA52302c290`](https://testnet.monadexplorer.com/address/0x94c4Ed74E942fEAe4FC79e31D24eaaA52302c290) |
+| Hunch | [`0x8a0c7C0ECcCda4209A834dF78B9d972d6075a3b9`](https://testnet.monadexplorer.com/address/0x8a0c7C0ECcCda4209A834dF78B9d972d6075a3b9) |
+| HunchOracle (CRE consumer) | [`0x6AC28Ae77f606232da6029aC352381A7F59F7830`](https://testnet.monadexplorer.com/address/0x6AC28Ae77f606232da6029aC352381A7F59F7830) |
+| CRE forwarder (Monad testnet simulation) | `0xB9F79d863261869B234c481D1f9A7af84AeAd192` |
 | AUSD (Agora, testnet) | `0xa9012a055bd4e0eDfF8Ce09f960291C09D5322dC` |
 
 ## Run it yourself
@@ -91,6 +109,6 @@ set -a; source ../.env; source .env.production; set +a; npx tsx scripts/e2e.ts
 ## Roadmap
 
 - **Disputes:** a stake-weighted group vote can overturn the creator's settlement within a window, and the creator can't bet on their own market without disclosure.
-- **AI resolver for public facts** ("Will it snow in Philly Friday?"): a Chainlink CRE workflow checks a data source and settles.
+- **More CRE resolvers:** weather, sports scores and Strava/GitHub activity ("Does Leo actually run 5k this week?"), using the same consumer pattern.
 - **iMessage / WhatsApp mini-app** so hunches live inside the chat itself.
 - **Mainnet AUSD** with Agora's instant settlement for card on-ramp/off-ramp.

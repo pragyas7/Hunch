@@ -1,0 +1,7 @@
+{
+  "name": "hunch-settle-wf",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@chainlink/cre-sdk": "^1.22.0", "viem": "2.34.0", "zod": "3.25.76" },
+  "devDependencies": { "typescript": "5.9.3" }
+}

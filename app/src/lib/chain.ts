@@ -2,6 +2,7 @@ import { createPublicClient, http, parseAbi, type Address } from "viem";
 import { monadTestnet } from "viem/chains";
 
 export const HUNCH = import.meta.env.VITE_HUNCH as Address;
+export const ORACLE = (import.meta.env.VITE_ORACLE || "") as Address | "";
 export const USD = import.meta.env.VITE_USD as Address;
 export const DEPLOY_BLOCK = BigInt(import.meta.env.VITE_DEPLOY_BLOCK);
 export const EXPLORER = "https://testnet.monadexplorer.com";
@@ -18,6 +19,9 @@ export const hunchAbi = parseAbi([
   "function post(bytes32 groupId, bytes encNote)",
   "event GroupNote(bytes32 indexed groupId, address indexed author, bytes encNote)",
   "function createMarket(bytes32 groupId, uint64 closesAt, bytes encQuestion) returns (uint256)",
+  "function createMarketWithResolver(bytes32 groupId, uint64 closesAt, bytes encQuestion, address resolver) returns (uint256)",
+  "function resolverOf(uint256) view returns (address)",
+  "function marketCount() view returns (uint256)",
   "function bet(uint256 id, bool yes, uint256 amount)",
   "function resolve(uint256 id, uint8 outcome)",
   "function claim(uint256 id)",
@@ -32,6 +36,12 @@ export const hunchAbi = parseAbi([
   "event BetPlaced(uint256 indexed marketId, bytes32 indexed groupId, address indexed bettor, bool yes, uint256 amount)",
   "event MarketResolved(uint256 indexed marketId, bytes32 indexed groupId, uint8 outcome)",
   "event Claimed(uint256 indexed marketId, bytes32 indexed groupId, address indexed bettor, uint256 payout)",
+]);
+
+export const oracleAbi = parseAbi([
+  "function setRule(uint256 marketId, string asset, uint256 threshold, bool above)",
+  "function rules(uint256) view returns (string asset, uint256 threshold, bool above, bool settled)",
+  "event Settled(uint256 indexed marketId, uint256 price, bool yes)",
 ]);
 
 export const usdAbi = parseAbi([
