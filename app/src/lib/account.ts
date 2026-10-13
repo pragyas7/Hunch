@@ -11,13 +11,15 @@ import { toViemAccount } from "@category-labs/mera/viem";
 import { HDKey } from "@scure/bip32";
 import { entropyToMnemonic, mnemonicToSeedSync } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
-import { createWalletClient, http, nonceManager, type Address, type Hex } from "viem";
+import { createWalletClient, http, nonceManager, parseGwei, type Address, type Hex } from "viem";
 import { monadTestnet } from "viem/chains";
 import { HUNCH, USD, publicClient } from "./chain";
 import { deriveKeyringKey } from "./crypto";
 
 const CRED_KEY = "hunch.cred"; // credential id hint only — not secret, safe to lose
 const ADDR_KEY = "hunch.addr";
+// Monad charges the full gas limit at the bid price, so bid just above the 100 gwei base fee.
+const FEES = { maxFeePerGas: parseGwei("120"), maxPriorityFeePerGas: parseGwei("2") };
 export const SESSION_TTL_MS = 30 * 60 * 1000;
 const rpId = location.hostname;
 
@@ -58,7 +60,7 @@ function scoped(session: Secp256k1SigningSession, keyringKey: CryptoKey): Unlock
     async send({ to, data }) {
       if (Date.now() > expiresAt) throw new Error("SESSION_EXPIRED");
       if (!allowed.has(to.toLowerCase())) throw new Error("Blocked: outside session scope");
-      const hash = await wallet.sendTransaction({ to, data });
+      const hash = await wallet.sendTransaction({ to, data, ...FEES });
       const r = await publicClient.waitForTransactionReceipt({ hash, pollingInterval: 250 });
       if (r.status !== "success") throw new Error("Transaction reverted");
       return hash;
