@@ -37,6 +37,25 @@ export async function saveKeyring(u: Unlocked, k: Keyring) {
   await u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "setKeyring", args: [blob] }) });
 }
 
+// ---------- public stats (aggregate only — no group content) ----------
+
+export async function globalStats() {
+  const base = { address: HUNCH, abi: hunchAbi, fromBlock: DEPLOY_BLOCK } as const;
+  const [groups, joins, markets, bets] = await Promise.all([
+    history.getContractEvents({ ...base, eventName: "GroupCreated" }),
+    history.getContractEvents({ ...base, eventName: "MemberJoined" }),
+    history.getContractEvents({ ...base, eventName: "MarketCreated" }),
+    history.getContractEvents({ ...base, eventName: "BetPlaced" }),
+  ]);
+  return {
+    groups: groups.length,
+    people: new Set(joins.map((j) => j.args.member!.toLowerCase())).size,
+    hunches: markets.length,
+    bets: bets.length,
+    wagered: bets.reduce((s, b) => s + b.args.amount!, 0n),
+  };
+}
+
 // ---------- onboarding ----------
 
 export async function sponsor(address: Address) {

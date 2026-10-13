@@ -139,3 +139,8 @@ small, .muted { color: var(--muted); font-size: 13px; }
 .spin { width: 16px; height: 16px; border: 2.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes up { from { transform: translate(-50%, 12px); opacity: 0; } }
+
+.stats { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; justify-content: center; text-align: center; }
+.stats b { color: var(--ink); }
+.stats .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yes); box-shadow: 0 0 0 4px var(--yes-soft); margin-right: 4px; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.4; } }

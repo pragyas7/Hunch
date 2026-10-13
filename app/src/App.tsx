@@ -7,7 +7,7 @@ import { EXPLORER, fmtUsd } from "./lib/chain";
 import { codeToSecret, secretToCode } from "./lib/crypto";
 import {
   claimPayout, createGroup, createMarket, joinGroup, leaderboard, loadGroup, loadKeyring, loadMarkets,
-  placeBet, resolveMarket, saveKeyring, sponsor, stakeOf, usdBalance,
+  placeBet, resolveMarket, saveKeyring, sponsor, stakeOf, usdBalance, globalStats,
   type Group, type Keyring, type Market,
 } from "./lib/data";
 
@@ -186,6 +186,21 @@ function Onboarding({ inviting, onSignUp, onLogIn }: { inviting: boolean; onSign
           <button type="button" className="link" onClick={() => setMode("new")}>New here? Create an account</button>
         </div>
       )}
+      <LiveStats />
+    </div>
+  );
+}
+
+function LiveStats() {
+  const [s, setS] = useState<Awaited<ReturnType<typeof globalStats>> | null>(null);
+  useEffect(() => {
+    globalStats().then(setS).catch(() => undefined);
+  }, []);
+  if (!s) return null;
+  return (
+    <div className="stats" aria-label="Live activity">
+      <span className="dot" /> Live on Monad
+      <b>{s.groups}</b> groups · <b>{s.hunches}</b> hunches · <b>{s.people}</b> people · <b>{fmtUsd(s.wagered)}</b> wagered
     </div>
   );
 }
@@ -255,7 +270,10 @@ function GroupView({ entry, me, run, now, onMoney }: {
   }, [refresh]);
 
   const nameOf = useCallback(
-    (a: Address) => (a.toLowerCase() === me.address.toLowerCase() ? "You" : group?.names.get(a.toLowerCase()) ?? a.slice(0, 6)),
+    (a: Address) => {
+      const n = group?.names.get(a.toLowerCase()) ?? a.slice(0, 6);
+      return a.toLowerCase() === me.address.toLowerCase() ? `${n} (you)` : n;
+    },
     [group, me.address],
   );
 
