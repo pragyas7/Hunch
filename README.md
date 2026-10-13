@@ -48,6 +48,8 @@ Friend markets are settled by their creator. For public facts, the creator can i
 cd cre && cre workflow simulate settle-wf --target staging-settings --broadcast   # needs `cre login` + CRE_ETH_PRIVATE_KEY
 ```
 
+**Status:** the workflow runs through the CRE simulator with `--broadcast`, which sends real settlement transactions on Monad testnet through the Chainlink forwarder. See [`cre/SIMULATION.md`](cre/SIMULATION.md) for a live market it settled. Deploying it to the hosted CRE network, so the cron runs unattended, requires Chainlink deployment access, which we've requested. Until then, price calls settle whenever the workflow is run.
+
 ### Key hierarchy
 
 ```
