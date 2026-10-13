@@ -1,0 +1,10 @@
+node_modules
+.env
+.env.*
+!app/.env.production
+dist
+.vercel
+contracts/out
+contracts/cache
+contracts/lib
+bounties.txt

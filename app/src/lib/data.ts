@@ -1,0 +1,208 @@
+import { createPublicClient, encodeFunctionData, http, maxUint256, type Address, type Hex } from "viem";
+import { monadTestnet } from "viem/chains";
+import { DEPLOY_BLOCK, HUNCH, USD, hunchAbi, publicClient, usdAbi } from "./chain";
+import { groupKeys, inviteSigner, newGroupSecret, open, seal, signInvite, type GroupKeys } from "./crypto";
+import type { Unlocked } from "./account";
+
+/** Historical reads go through Envio HyperRPC (via /api/rpc); the public RPC only serves 100 blocks of logs. */
+const history = createPublicClient({ chain: monadTestnet, transport: http("/api/rpc") });
+
+export type KeyringEntry = { secret: Hex; name: string };
+export type Keyring = { me: string; groups: KeyringEntry[] };
+export type Group = GroupKeys & { name: string; members: Address[]; creator: Address; names: Map<string, string> };
+export type Bet = { bettor: Address; yes: boolean; amount: bigint; block: bigint };
+export type Market = {
+  id: bigint;
+  groupId: Hex;
+  creator: Address;
+  closesAt: number;
+  outcome: 0 | 1 | 2 | 3;
+  yesPool: bigint;
+  noPool: bigint;
+  question: string;
+  bets: Bet[];
+  claimed: Set<string>;
+};
+
+// ---------- keyring (group keys wrapped under the passkey-derived key, stored onchain) ----------
+
+export async function loadKeyring(u: Unlocked): Promise<Keyring | null> {
+  const blob = await publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "keyring", args: [u.address] });
+  if (!blob || blob === "0x") return null;
+  return JSON.parse(await open(u.keyringKey, blob));
+}
+
+export async function saveKeyring(u: Unlocked, k: Keyring) {
+  const blob = await seal(u.keyringKey, JSON.stringify(k));
+  await u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "setKeyring", args: [blob] }) });
+}
+
+// ---------- onboarding ----------
+
+export async function sponsor(address: Address) {
+  const r = await fetch("/api/drip", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ address }),
+  });
+  if (!r.ok) throw new Error("Couldn't set up your account — try again in a moment.");
+}
+
+export const usdBalance = (a: Address) =>
+  publicClient.readContract({ address: USD, abi: usdAbi, functionName: "balanceOf", args: [a] });
+
+// ---------- groups ----------
+
+async function postName(u: Unlocked, g: GroupKeys, me: string) {
+  const note = await seal(g.content, JSON.stringify({ t: "name", v: me }));
+  await u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "post", args: [g.groupId, note] }) });
+}
+
+export async function createGroup(u: Unlocked, name: string, keyring: Keyring) {
+  const secret = newGroupSecret();
+  const g = await groupKeys(secret);
+  const encName = await seal(g.content, name);
+  await u.send({
+    to: HUNCH,
+    data: encodeFunctionData({ abi: hunchAbi, functionName: "createGroup", args: [g.groupId, inviteSigner(g), encName] }),
+  });
+  await postName(u, g, keyring.me);
+  const next = { ...keyring, groups: [...keyring.groups, { secret, name }] };
+  await saveKeyring(u, next);
+  return { secret, next };
+}
+
+export async function joinGroup(u: Unlocked, secret: Hex, keyring: Keyring) {
+  const g = await groupKeys(secret);
+  const info = await publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "groups", args: [g.groupId] });
+  if (info[0] === "0x0000000000000000000000000000000000000000") throw new Error("This invite link isn't valid.");
+  const member = await publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "isMember", args: [g.groupId, u.address] });
+  if (!member) {
+    const sig = await signInvite(g, u.address);
+    await u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "joinGroup", args: [g.groupId, sig] }) });
+    await postName(u, g, keyring.me);
+  }
+  const created = await history.getContractEvents({
+    address: HUNCH, abi: hunchAbi, eventName: "GroupCreated", args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK,
+  });
+  const name = created[0] ? await open(g.content, created[0].args.encName!) : "Group";
+  if (keyring.groups.some((k) => k.secret === secret)) return { name, next: keyring };
+  const next = { ...keyring, groups: [...keyring.groups, { secret, name }] };
+  await saveKeyring(u, next);
+  return { name, next };
+}
+
+export async function loadGroup(entry: KeyringEntry): Promise<Group> {
+  const g = await groupKeys(entry.secret);
+  const [joined, notes, info] = await Promise.all([
+    history.getContractEvents({ address: HUNCH, abi: hunchAbi, eventName: "MemberJoined", args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK }),
+    history.getContractEvents({ address: HUNCH, abi: hunchAbi, eventName: "GroupNote", args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK }),
+    publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "groups", args: [g.groupId] }),
+  ]);
+  const names = new Map<string, string>();
+  for (const n of notes) {
+    try {
+      const msg = JSON.parse(await open(g.content, n.args.encNote!));
+      if (msg.t === "name") names.set(n.args.author!.toLowerCase(), String(msg.v).slice(0, 24));
+    } catch { /* ignore undecryptable notes */ }
+  }
+  return { ...g, name: entry.name, members: joined.map((l) => l.args.member!), creator: info[0], names };
+}
+
+// ---------- markets ----------
+
+export async function loadMarkets(g: Group): Promise<Market[]> {
+  const filter = { address: HUNCH, abi: hunchAbi, args: { groupId: g.groupId }, fromBlock: DEPLOY_BLOCK } as const;
+  const [created, bets, claims] = await Promise.all([
+    history.getContractEvents({ ...filter, eventName: "MarketCreated" }),
+    history.getContractEvents({ ...filter, eventName: "BetPlaced" }),
+    history.getContractEvents({ ...filter, eventName: "Claimed" }),
+  ]);
+  const markets = await Promise.all(
+    created.map(async (l) => {
+      const id = l.args.marketId!;
+      const m = await publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "markets", args: [id] });
+      let question = "🔒 (couldn't decrypt)";
+      try {
+        question = await open(g.content, l.args.encQuestion!);
+      } catch { /* wrong key — leave placeholder */ }
+      return {
+        id,
+        groupId: g.groupId,
+        creator: m[1],
+        closesAt: Number(m[2]),
+        outcome: m[3] as Market["outcome"],
+        yesPool: m[4],
+        noPool: m[5],
+        question,
+        bets: bets
+          .filter((b) => b.args.marketId === id)
+          .map((b) => ({ bettor: b.args.bettor!, yes: b.args.yes!, amount: b.args.amount!, block: b.blockNumber })),
+        claimed: new Set(claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor!.toLowerCase())),
+      } satisfies Market;
+    }),
+  );
+  return markets.sort((a, b) => Number(b.id - a.id));
+}
+
+export async function createMarket(u: Unlocked, g: Group, question: string, closesAt: number) {
+  const enc = await seal(g.content, question);
+  await u.send({
+    to: HUNCH,
+    data: encodeFunctionData({ abi: hunchAbi, functionName: "createMarket", args: [g.groupId, BigInt(closesAt), enc] }),
+  });
+}
+
+export async function placeBet(u: Unlocked, id: bigint, yes: boolean, amount: bigint) {
+  const allowance = await publicClient.readContract({ address: USD, abi: usdAbi, functionName: "allowance", args: [u.address, HUNCH] });
+  if (allowance < amount)
+    await u.send({ to: USD, data: encodeFunctionData({ abi: usdAbi, functionName: "approve", args: [HUNCH, maxUint256] }) });
+  await u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "bet", args: [id, yes, amount] }) });
+}
+
+export const resolveMarket = (u: Unlocked, id: bigint, outcome: 1 | 2 | 3) =>
+  u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "resolve", args: [id, outcome] }) });
+
+export const claimPayout = (u: Unlocked, id: bigint) =>
+  u.send({ to: HUNCH, data: encodeFunctionData({ abi: hunchAbi, functionName: "claim", args: [id] }) });
+
+/** What `who` would get back if the market resolved `yes` right now (parimutuel). */
+export function payoutIf(m: Market, who: Address, yes: boolean): bigint {
+  const mine = m.bets.filter((b) => b.bettor.toLowerCase() === who.toLowerCase() && b.yes === yes).reduce((s, b) => s + b.amount, 0n);
+  const side = yes ? m.yesPool : m.noPool;
+  return side === 0n ? 0n : (mine * (m.yesPool + m.noPool)) / side;
+}
+
+export function stakeOf(m: Market, who: Address) {
+  let yes = 0n, no = 0n;
+  for (const b of m.bets) if (b.bettor.toLowerCase() === who.toLowerCase()) b.yes ? (yes += b.amount) : (no += b.amount);
+  return { yes, no };
+}
+
+/** Group leaderboard: net profit across resolved markets + hit rate. */
+export function leaderboard(markets: Market[], members: Address[]) {
+  const rows = new Map(members.map((a) => [a.toLowerCase(), { address: a, pnl: 0n, wins: 0, calls: 0 }]));
+  for (const m of markets) {
+    if (m.outcome !== 1 && m.outcome !== 2) continue;
+    const yesWon = m.outcome === 1;
+    const total = m.yesPool + m.noPool;
+    const win = yesWon ? m.yesPool : m.noPool;
+    const per = new Map<string, { yes: bigint; no: bigint }>();
+    for (const b of m.bets) {
+      const k = b.bettor.toLowerCase();
+      const s = per.get(k) ?? { yes: 0n, no: 0n };
+      b.yes ? (s.yes += b.amount) : (s.no += b.amount);
+      per.set(k, s);
+    }
+    for (const [k, s] of per) {
+      const r = rows.get(k);
+      if (!r) continue;
+      const winStake = yesWon ? s.yes : s.no;
+      const payout = win === 0n ? 0n : (winStake * total) / win;
+      r.pnl += payout - s.yes - s.no;
+      r.calls += 1;
+      if (winStake > 0n) r.wins += 1;
+    }
+  }
+  return [...rows.values()].sort((a, b) => (b.pnl > a.pnl ? 1 : b.pnl < a.pnl ? -1 : b.wins - a.wins));
+}
