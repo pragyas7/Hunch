@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f6f1e7"/>
+  <rect x="70" y="70" width="150" height="150" rx="36" fill="#6c3cf0"/>
+  <path d="M104 116 h82 a10 10 0 0 1 10 10 v42 a10 10 0 0 1 -10 10 h-44 l-22 18 v-18 h-16 a10 10 0 0 1 -10 -10 v-42 a10 10 0 0 1 10 -10z" fill="#fffdf8"/>
+  <circle cx="160" cy="138" r="7" fill="#e2463a"/><circle cx="160" cy="160" r="7" fill="#13a35f"/>
+  <text x="250" y="178" font-family="Arial Black, Helvetica, Arial" font-weight="900" font-size="88" fill="#1b1530" letter-spacing="-4">hunch<tspan fill="#6c3cf0">.</tspan></text>
+  <text x="70" y="330" font-family="Arial Black, Helvetica, Arial" font-weight="900" font-size="54" fill="#1b1530" letter-spacing="-2">Bet on your friends.</text>
+  <text x="70" y="400" font-family="Arial Black, Helvetica, Arial" font-weight="900" font-size="54" fill="#6c3cf0" letter-spacing="-2">Privately.</text>
+  <rect x="70" y="480" width="560" height="74" rx="37" fill="#ffffff" stroke="#e6dfd0" stroke-width="2"/>
+  <text x="104" y="528" font-family="Helvetica, Arial" font-weight="700" font-size="30" fill="#1b1530">🔒 You've been invited to a group</text>
+  <rect x="750" y="230" width="400" height="300" rx="28" fill="#ffffff" stroke="#e6dfd0" stroke-width="2"/>
+  <text x="780" y="290" font-family="Helvetica, Arial" font-weight="700" font-size="28" fill="#1b1530">Will Sam make 8am</text>
+  <text x="780" y="326" font-family="Helvetica, Arial" font-weight="700" font-size="28" fill="#1b1530">lecture this week?</text>
+  <rect x="780" y="356" width="340" height="46" rx="12" fill="#fde4e1"/>
+  <rect x="780" y="356" width="240" height="46" rx="12" fill="#dff5e8"/>
+  <text x="796" y="388" font-family="Helvetica, Arial" font-weight="800" font-size="22" fill="#13a35f">YES 65%</text>
+  <text x="1106" y="388" font-family="Helvetica, Arial" font-weight="800" font-size="22" fill="#e2463a" text-anchor="end">NO 35%</text>
+  <rect x="780" y="430" width="162" height="62" rx="16" fill="#13a35f"/><text x="861" y="471" font-family="Helvetica, Arial" font-weight="800" font-size="26" fill="#fff" text-anchor="middle">YES</text>
+  <rect x="958" y="430" width="162" height="62" rx="16" fill="#e2463a"/><text x="1039" y="471" font-family="Helvetica, Arial" font-weight="800" font-size="26" fill="#fff" text-anchor="middle">NO</text>
+</svg>
