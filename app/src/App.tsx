@@ -32,6 +32,13 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  // Invite links opened while the app is already loaded only change the #fragment.
+  useEffect(() => {
+    const onHash = () => setJoinCode(readJoinCode());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   /** Runs an onchain action with a toast that reports real settlement time. */
   const run = useCallback(async <T,>(label: string, fn: () => Promise<T>, done?: string): Promise<T | undefined> => {
     setToast({ kind: "busy", text: label });
