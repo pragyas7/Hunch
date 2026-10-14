@@ -263,12 +263,12 @@ function GroupView({ entry, me, run, now, onMoney }: {
 
   const refresh = useCallback(async () => {
     try {
-      const { group: g, markets: ms } = await loadGroupState(entry);
+      const { group: g, markets: ms } = await loadGroupState(entry, me.address);
       if (!alive.current) return;
       setGroup(g);
       setMarkets(ms);
     } catch { /* transient read error — next poll retries */ }
-  }, [entry]);
+  }, [entry, me.address]);
 
   useEffect(() => {
     alive.current = true;

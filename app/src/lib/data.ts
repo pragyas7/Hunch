@@ -130,7 +130,7 @@ const ruleCache = new Map<bigint, Market["oracle"] | null>();
  * topic (GroupCreated, MemberJoined, GroupNote) and where it's the second (market events). Contract state is
  * read in one multicall batch.
  */
-export async function loadGroupState(entry: KeyringEntry): Promise<{ group: Group; markets: Market[] }> {
+export async function loadGroupState(entry: KeyringEntry, me?: Address): Promise<{ group: Group; markets: Market[] }> {
   const g = await groupKeys(entry.secret);
   const [asTopic1, asTopic2, info] = await Promise.all([
     rawLogs([null, g.groupId]),
@@ -155,9 +155,12 @@ export async function loadGroupState(entry: KeyringEntry): Promise<{ group: Grou
   const markets = await Promise.all(
     of("MarketCreated").map(async (l) => {
       const id = l.args.marketId;
-      const [m, resolver] = await Promise.all([
+      // Claim state comes from the contract so "Collect" disappears the moment the claim lands,
+      // without waiting for the indexer to catch up.
+      const [m, resolver, iClaimed] = await Promise.all([
         publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "markets", args: [id] }),
         ruleCache.has(id) ? Promise.resolve(null) : publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "resolverOf", args: [id] }),
+        me ? publicClient.readContract({ address: HUNCH, abi: hunchAbi, functionName: "claimed", args: [id, me] }) : Promise.resolve(false),
       ]);
       if (!ruleCache.has(id)) {
         let rule: Market["oracle"] | null = null;
@@ -184,7 +187,10 @@ export async function loadGroupState(entry: KeyringEntry): Promise<{ group: Grou
         bets: bets
           .filter((b) => b.args.marketId === id)
           .map((b) => ({ bettor: b.args.bettor, yes: b.args.yes, amount: b.args.amount, block: b.blockNumber })),
-        claimed: new Set(claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor.toLowerCase())),
+        claimed: new Set([
+          ...claims.filter((c) => c.args.marketId === id).map((c) => c.args.bettor.toLowerCase()),
+          ...(iClaimed && me ? [me.toLowerCase()] : []),
+        ]),
         oracle: ruleCache.get(id) ?? undefined,
       } satisfies Market;
     }),
