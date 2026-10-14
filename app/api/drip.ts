@@ -17,7 +17,14 @@ const erc20 = parseAbi([
 ]);
 const faucetAbi = parseAbi(["function requestFunds(address)"]);
 
-type Req = { method?: string; body: unknown };
+// Abuse guard (per warm instance): 5 grants per IP per minute (friends often share Wi-Fi), plus a global hourly budget.
+const seenIp = new Map<string, number[]>();
+const PER_IP_PER_MIN = 5;
+let hourStart = Date.now();
+let hourCount = 0;
+const HOURLY_BUDGET = 60;
+
+type Req = { method?: string; body: unknown; headers?: Record<string, string | string[] | undefined> };
 type Res = { status: (c: number) => Res; json: (b: unknown) => void };
 
 export default async function handler(req: Req, res: Res) {
@@ -25,6 +32,12 @@ export default async function handler(req: Req, res: Res) {
   const body = (typeof req.body === "string" ? JSON.parse(req.body) : req.body) as { address?: string };
   const to = body?.address;
   if (!to || !isAddress(to)) return res.status(400).json({ error: "bad address" });
+  const ip = String(req.headers?.["x-forwarded-for"] ?? "").split(",")[0].trim() || "unknown";
+  const now = Date.now();
+  if (now - hourStart > 3_600_000) { hourStart = now; hourCount = 0; }
+  const recent = (seenIp.get(ip) ?? []).filter((t) => t > now - 60_000);
+  if (recent.length >= PER_IP_PER_MIN || hourCount >= HOURLY_BUDGET)
+    return res.status(429).json({ error: "Too many sign-ups — try again in a minute." });
 
   const ausd = process.env.VITE_USD as Hex;
   const account = privateKeyToAccount(process.env.DEPLOYER_PK as Hex);
@@ -38,6 +51,7 @@ export default async function handler(req: Req, res: Res) {
   ]);
 
   const hashes: Hex[] = [];
+  if (gas < LOW_WATER || (usd === 0n && gas === 0n)) { seenIp.set(ip, [...recent, now]); hourCount++; }
   let nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
   if (gas < LOW_WATER) hashes.push(await wallet.sendTransaction({ to, value: GAS_TOPUP, nonce: nonce++, ...FEES }));
   // One starter grant per account: only fund accounts that have never held AUSD.
